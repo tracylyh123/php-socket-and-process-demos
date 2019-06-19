@@ -1,6 +1,11 @@
 <?php
 namespace Demos\Monitor;
-
+/**
+ * @package Demos\Monitor
+ * @author Tracy li <tracylyh123@gmail.com>
+ *
+ * start: php FilesMonitor.php -- {dir}
+ */
 class FilesMonitor
 {
     const POLLING_TIME = 1;
@@ -143,5 +148,6 @@ final class WatchedFiles
     }
 }
 
+$dir = $argv[2] ?? die('dir is required');
 $moitor = new FilesMonitor(new Console());
-$moitor->monitor('/tmp');
+$moitor->monitor($dir);
