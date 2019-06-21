@@ -5,7 +5,7 @@ namespace Demos\Channel;
  * @package Demos\Channel
  * @author Tracy li <tracylyh123@gmail.com>
  *
- * start client: php Client.php {semkey} {shmkey}
+ * start client: php Client.php
  */
 class ShareMemory implements \ArrayAccess
 {
@@ -308,9 +308,19 @@ final class Client
     }
 }
 
-$semkey = $argv[1] ?? die('semkey is required' . PHP_EOL);
-$shmkey = $argv[2] ?? die('shmkey is required' . PHP_EOL);
-$sm = new ShareMemory((int) $semkey, (int) $shmkey);
+$tmpsem = '/tmp/sem';
+$tmpshm = '/tmp/shm';
+touch($tmpsem);
+touch($tmpshm);
+$semkey = ftok($tmpsem, 'e');
+if (-1 === $semkey) {
+    die('ftok() failed');
+}
+$shmkey = ftok($tmpshm, 'h');
+if (-1 === $semkey) {
+    die('ftok() failed');
+}
+$sm = new ShareMemory($semkey, $shmkey);
 //$sm->destory();exit;
 $s = new Client($sm);
 $s->start();
