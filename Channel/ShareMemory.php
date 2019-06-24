@@ -7,7 +7,16 @@ namespace Demos\Channel;
  *
  * start client: php Client.php
  */
-class ShareMemory implements \ArrayAccess
+interface ExStorage extends \ArrayAccess
+{
+    function acquire();
+
+    function release();
+
+    function destory();
+}
+
+class ShareMemory implements ExStorage
 {
     protected $semId;
 
@@ -125,111 +134,111 @@ class Message
 
 class MessagesManager
 {
-    protected $memory;
+    protected $storage;
 
     protected $pid;
 
-    public function __construct($pid, ShareMemory $memory)
+    public function __construct($pid, ExStorage $storage)
     {
-        $this->memory = $memory;
+        $this->storage = $storage;
         $this->pid = $pid;
     }
 
     public function notify(string $content): void
     {
-        $this->memory->acquire();
+        $this->storage->acquire();
         try {
             $msgId = uniqid('message_');
-            $this->memory[$msgId] = new Message($msgId, $content);
-            $pidtable = $this->memory['registered_pid_table'] ?? [];
+            $this->storage[$msgId] = new Message($msgId, $content);
+            $pidtable = $this->storage['registered_pid_table'] ?? [];
             foreach ($pidtable as $pid) {
                 if ($pid != $this->pid) {
                     if (false === posix_kill($pid, SIGCONT)) {
                         echo 'posix_kill() failed, reason: ' . posix_strerror(posix_get_last_error()) . PHP_EOL;
                         continue;
                     }
-                    $unread = $this->memory['unread_' . $pid] ?? [];
+                    $unread = $this->storage['unread_' . $pid] ?? [];
                     $unread[] = $msgId;
-                    $this->memory['unread_' . $pid] = $unread;
-                    $message = $this->memory[$msgId];
+                    $this->storage['unread_' . $pid] = $unread;
+                    $message = $this->storage[$msgId];
                     $message->addRefCount();
-                    $this->memory[$msgId] = $message;
+                    $this->storage[$msgId] = $message;
                 }
             }
         } catch (ShareMemoryException $e) {
             echo $e->getMessage() . PHP_EOL;
         } finally {
-            $this->memory->release();
+            $this->storage->release();
         }
     }
 
     public function receive(): bool
     {
-        $this->memory->acquire();
+        $this->storage->acquire();
         $result = true;
         try {
-            $unread = $this->memory['unread_' . $this->pid] ?? [];
+            $unread = $this->storage['unread_' . $this->pid] ?? [];
             foreach ($unread as $key => $msgId) {
-                $message = $this->memory[$msgId];
+                $message = $this->storage[$msgId];
                 $message->outputContent();
                 $message->subRefCount();
                 if (!$message->hasRef()) {
-                    unset($this->memory[$msgId]);
+                    unset($this->storage[$msgId]);
                 }
                 unset($unread[$key]);
             }
-            $this->memory['unread_' . $this->pid] = $unread;
+            $this->storage['unread_' . $this->pid] = $unread;
         } catch (ShareMemoryException $e) {
             $result = false;
         } finally {
-            $this->memory->release();
+            $this->storage->release();
         }
         return $result;
     }
 
     public function register(): bool
     {
-        $this->memory->acquire();
+        $this->storage->acquire();
         $result = true;
         try {
-            $pidtable = $this->memory['registered_pid_table'] ?? [];
+            $pidtable = $this->storage['registered_pid_table'] ?? [];
             if (!in_array($this->pid, $pidtable)) {
                 $pidtable[] = $this->pid;
-                $this->memory['registered_pid_table'] = $pidtable;
+                $this->storage['registered_pid_table'] = $pidtable;
             }
         } catch (ShareMemoryException $e) {
             $result = false;
         } finally {
-            $this->memory->release();
+            $this->storage->release();
         }
         return $result;
     }
 
     public function unregister(): bool
     {
-        $this->memory->acquire();
+        $this->storage->acquire();
         $result = true;
         try {
-            $pidtable = $this->memory['registered_pid_table'] ?? [];
+            $pidtable = $this->storage['registered_pid_table'] ?? [];
             if (in_array($this->pid, $pidtable)) {
                 if (false !== ($index = array_search($this->pid, $pidtable))) {
                     unset($pidtable[$index]);
-                    $this->memory['registered_pid_table'] = $pidtable;
+                    $this->storage['registered_pid_table'] = $pidtable;
                 }
-                $unread = $this->memory['unread_' . $this->pid] ?? [];
+                $unread = $this->storage['unread_' . $this->pid] ?? [];
                 foreach ($unread as $msgId) {
-                    $message = $this->memory[$msgId];
+                    $message = $this->storage[$msgId];
                     $message->subRefCount();
                     if (!$message->hasRef()) {
-                        unset($this->memory[$msgId]);
+                        unset($this->storage[$msgId]);
                     }
                 }
-                unset($this->memory['unread_' . $this->pid]);
+                unset($this->storage['unread_' . $this->pid]);
             }
         } catch (ShareMemoryException $e) {
             $result = false;
         } finally {
-            $this->memory->release();
+            $this->storage->release();
         }
         return $result;
     }
@@ -239,11 +248,11 @@ final class Client
 {
     const QUIT_FLAG = '/quit';
 
-    protected $shareMemory;
+    protected $storage;
 
-    public function __construct(ShareMemory $shareMemory)
+    public function __construct(ExStorage $storage)
     {
-        $this->shareMemory = $shareMemory;
+        $this->storage = $storage;
     }
 
     public function start()
@@ -261,7 +270,7 @@ final class Client
                 die('pcntl_signal() failed, reason: ' . pcntl_strerror(pcntl_get_last_error()) . PHP_EOL);
             }
             $read = [STDIN];
-            $manager = new MessagesManager($pid, $this->shareMemory);
+            $manager = new MessagesManager($pid, $this->storage);
             if (false === $manager->register()) {
                 die('cannot register message manager' . PHP_EOL);
             }
@@ -297,7 +306,7 @@ final class Client
                     echo 'pcntl_sigwaitinfo() failed, reason: ' . pcntl_strerror(pcntl_get_last_error()) . PHP_EOL;
                     continue;
                 }
-                $manager = new MessagesManager(posix_getpid(), $this->shareMemory);
+                $manager = new MessagesManager(posix_getpid(), $this->storage);
                 if (false === $manager->receive()) {
                     echo 'cannot receive message from message manager' . PHP_EOL;
                 }
